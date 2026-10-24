@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 /// right edge and it appears; drop onto it to hold things; drag from it to take them all.
 @MainActor
 final class SquareController {
-    static let side: CGFloat = 92
+    static let side: CGFloat = 116
 
     let store: Store
     let thumbs = Thumbnails()
@@ -342,7 +342,7 @@ final class SquareMouseView: NSView, NSDraggingSource, ShelfDragSource {
     }
 }
 
-/// Blue striped drop target when empty or mid-drag; otherwise the newest files fanned out.
+/// Blue striped square; the newest files sit fanned out on top of it.
 struct SquareView: View {
     @ObservedObject var store: Store
     @ObservedObject var thumbs: Thumbnails
@@ -352,7 +352,7 @@ struct SquareView: View {
         let hot = store.targeted
         let items = Array(store.items.prefix(3))
         ZStack {
-            if items.isEmpty || store.dragActive {
+            Group {
                 shape.fill(Color.accentColor.opacity(hot ? 0.32 : 0.16))
                 Canvas { ctx, size in
                     var path = Path()
@@ -374,12 +374,13 @@ struct SquareView: View {
                             .resizable()
                             .interpolation(.high)
                             .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: 50, maxHeight: 50)
+                            .frame(maxWidth: 64, maxHeight: 64)
                             .rotationEffect(.degrees(Double(i) * -7))
-                            .offset(x: CGFloat(i) * -5, y: CGFloat(i) * -2)
+                            .offset(x: CGFloat(i) * -6, y: CGFloat(i) * -2)
+                            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
                     }
                 }
-                .opacity(store.dragActive || store.items.contains { $0.state == .pending } ? 0.5 : 1)
+                .opacity(store.items.contains { $0.state == .pending } ? 0.5 : 1)
                 if store.items.contains(where: { $0.state == .pending }) {
                     ProgressView().controlSize(.small)
                 }

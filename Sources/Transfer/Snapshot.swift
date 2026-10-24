@@ -15,7 +15,7 @@ enum Snapshot {
         func render(_ name: String) {
             let r = ImageRenderer(content: SquareView(store: store, thumbs: thumbs)
                 .frame(width: SquareController.side, height: SquareController.side)
-                .background(Color.gray.opacity(store.items.isEmpty || store.dragActive ? 0 : 0.35),
+                .background(Color.clear,
                             in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .padding(24)
                 .background(Color(red: 0.17, green: 0.19, blue: 0.19)))
