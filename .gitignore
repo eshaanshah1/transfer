@@ -1,0 +1,8 @@
+.build/
+build/
+.selftest/
+.snap/
+sandbox/
+.DS_Store
+*.xcodeproj/
+.swiftpm/
