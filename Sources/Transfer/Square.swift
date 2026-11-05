@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 /// right edge and it appears; drop onto it to hold things; drag from it to take them all.
 @MainActor
 final class SquareController {
-    static let side: CGFloat = 116
+    static let side: CGFloat = 132
 
     let store: Store
     let thumbs = Thumbnails()
@@ -142,7 +142,12 @@ final class SquareController {
     func dragOut(event: NSEvent, in view: NSView, source: NSDraggingSource) {
         let items = store.items.filter { !$0.isFailed }
         guard !items.isEmpty else { return }
-        let p = view.convert(event.locationInWindow, from: nil)
+        // The stack in hand leaves as one picture, right where it's sitting, so it looks
+        // like the same cards coming off the folder. The rest ride along unseen.
+        let center = store.hand ?? handPoint(pressedAt: view.convert(event.locationInWindow, from: nil), in: view)
+        let picture = handPicture(items, scale: view.window?.backingScaleFactor ?? 2)
+        let side = SquareController.side
+        let box = NSRect(x: center.x - side / 2, y: side - center.y - side / 2, width: side, height: side)
         var dragging: [NSDraggingItem] = []
         for (i, item) in items.enumerated() {
             // Still arriving: hand out a promise that's kept once it lands.
@@ -150,15 +155,40 @@ final class SquareController {
                 ? PendingPromise(item: item).provider
                 : store.url(for: item) as NSURL
             let d = NSDraggingItem(pasteboardWriter: writer)
-            let o = CGFloat(min(i, 3)) * 5
-            d.setDraggingFrame(NSRect(x: p.x - 28 + o, y: p.y - 28 - o, width: 56, height: 56),
-                               contents: thumbs.image(for: item))
+            d.setDraggingFrame(box, contents: i == 0 ? picture : nil)
             dragging.append(d)
         }
+        store.hand = nil
         store.draggingItemIDs = items.map(\.id)
         let session = view.beginDraggingSession(with: dragging, event: event, source: source)
         session.animatesToStartingPositionsOnCancelOrFail = true
-        session.draggingFormation = items.count > 1 ? .stack : .none
+        session.draggingFormation = .none
+    }
+
+    /// Mouse down: the files come out of the folder and into your hand.
+    func press(event: NSEvent, in view: NSView) {
+        guard store.items.contains(where: { !$0.isFailed }) else { return }
+        store.hand = handPoint(pressedAt: view.convert(event.locationInWindow, from: nil), in: view)
+        NSCursor.closedHand.set()
+    }
+
+    /// Let go without dragging: they drop back in.
+    func release() {
+        store.hand = nil
+        NSCursor.arrow.set()
+    }
+
+    /// Where the stack sits for a press, in SwiftUI's top-down coordinates, kept whole inside the window.
+    private func handPoint(pressedAt p: NSPoint, in view: NSView) -> CGPoint {
+        let side = Self.side
+        return CGPoint(x: min(max(p.x, 42), side - 42), y: min(max(view.bounds.height - p.y - 8, 46), side - 46))
+    }
+
+    private func handPicture(_ items: [ShelfItem], scale: CGFloat) -> NSImage? {
+        let r = ImageRenderer(content: CardFan(items: Array(items.prefix(3)), thumbs: thumbs, places: CardPlace.hand, scale: CardPlace.handScale)
+            .frame(width: Self.side, height: Self.side))
+        r.scale = scale
+        return r.cgImage.map { NSImage(cgImage: $0, size: NSSize(width: Self.side, height: Self.side)) }
     }
 
     func dragOutEnded(_ operation: NSDragOperation) {
@@ -191,7 +221,6 @@ final class SquareController {
 // MARK: - Window
 
 final class SquarePanel: NSPanel {
-    private let fx = NSVisualEffectView()
     private var shown = false
 
     init() {
@@ -202,23 +231,17 @@ final class SquarePanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .stationary]
         backgroundColor = .clear
         isOpaque = false
-        hasShadow = true
+        // The folder isn't square, so it draws its own shadow.
+        hasShadow = false
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
         animationBehavior = .none
-        fx.material = .popover
-        fx.state = .active
-        fx.blendingMode = .behindWindow
-        fx.maskImage = Self.mask(radius: 16)
     }
 
     override var canBecomeKey: Bool { false }
 
     func install(_ content: NSView) {
-        content.frame = fx.bounds
-        content.autoresizingMask = [.width, .height]
-        fx.addSubview(content)
-        contentView = fx
+        contentView = content
     }
 
     func show(frame: NSRect, edge: ScreenEdge) {
@@ -262,18 +285,6 @@ final class SquarePanel: NSPanel {
                 self.alphaValue = 1
             }
         })
-    }
-
-    static func mask(radius r: CGFloat) -> NSImage {
-        let d = r * 2 + 2
-        let img = NSImage(size: NSSize(width: d, height: d), flipped: false) { rect in
-            NSColor.black.set()
-            NSBezierPath(roundedRect: rect, xRadius: r, yRadius: r).fill()
-            return true
-        }
-        img.capInsets = NSEdgeInsets(top: r, left: r, bottom: r, right: r)
-        img.resizingMode = .stretch
-        return img
     }
 }
 
@@ -320,8 +331,14 @@ final class SquareMouseView: NSView, NSDraggingSource, ShelfDragSource {
     private var down: NSEvent?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) { down = event }
-    override func mouseUp(with event: NSEvent) { down = nil }
+    override func mouseDown(with event: NSEvent) {
+        down = event
+        controller?.press(event: event, in: self)
+    }
+    override func mouseUp(with event: NSEvent) {
+        down = nil
+        controller?.release()
+    }
     override func rightMouseDown(with event: NSEvent) { controller?.popUpMenu(with: event, in: self) }
 
     override func mouseDragged(with event: NSEvent) {
@@ -342,62 +359,165 @@ final class SquareMouseView: NSView, NSDraggingSource, ShelfDragSource {
     }
 }
 
-/// Blue striped square; the newest files sit fanned out on top of it.
+/// A blue folder: the newest files stand in it as white-edged cards, and they show
+/// blurred through its frosted front.
 struct SquareView: View {
     @ObservedObject var store: Store
     @ObservedObject var thumbs: Thumbnails
 
+    private static let blue = Color(red: 0.30, green: 0.67, blue: 0.98)
+    private static let size = CGSize(width: 116, height: 100)
+
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
         let hot = store.targeted
         let items = Array(store.items.prefix(3))
+        let pending = store.items.contains { $0.state == .pending }
+        // Out of the folder: in hand, or already gone with the drag.
+        let away = store.hand != nil || !store.draggingItemIDs.isEmpty
+        let inHand = store.items.filter { !$0.isFailed }.prefix(3)
+        let center = SquareController.side / 2
         ZStack {
-            Group {
-                shape.fill(Color.accentColor.opacity(hot ? 0.32 : 0.16))
-                Canvas { ctx, size in
-                    var path = Path()
-                    var x = -size.height
-                    while x < size.width {
-                        path.move(to: CGPoint(x: x, y: size.height))
-                        path.addLine(to: CGPoint(x: x + size.height, y: 0))
-                        x += 16
-                    }
-                    ctx.stroke(path, with: .color(Color.accentColor.opacity(hot ? 0.45 : 0.28)), lineWidth: 6)
-                }
-                .clipShape(shape)
-                shape.strokeBorder(Color.accentColor, lineWidth: 3)
-            }
-            if !items.isEmpty {
+            // Nearly invisible, so the window's corners still take drops and clicks.
+            Color.black.opacity(0.01)
+            ZStack {
+                // Back of the folder.
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Self.blue)
+                    .padding(EdgeInsets(top: 0, leading: 4, bottom: 12, trailing: 4))
+                cards(items, hot: hot).opacity(away ? 0 : 1)
+                // Frosted front: the same cards again, blurred and clipped to the front's shape.
                 ZStack {
-                    ForEach(Array(items.enumerated().reversed()), id: \.offset) { i, item in
-                        Image(nsImage: thumbs.image(for: item))
-                            .resizable()
-                            .interpolation(.high)
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: 64, maxHeight: 64)
-                            .rotationEffect(.degrees(Double(i) * -7))
-                            .offset(x: CGFloat(i) * -6, y: CGFloat(i) * -2)
-                            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-                    }
+                    Self.blue
+                    cards(items, hot: hot).blur(radius: 6).opacity(away ? 0 : 1)
+                    Self.blue.opacity(0.3)
                 }
-                .opacity(store.items.contains { $0.state == .pending } ? 0.5 : 1)
-                if store.items.contains(where: { $0.state == .pending }) {
-                    ProgressView().controlSize(.small)
+                .clipShape(FolderFront())
+                .overlay(FolderFront().stroke(
+                    LinearGradient(colors: [.white.opacity(0.75), .white.opacity(0.3)], startPoint: .top, endPoint: .bottom),
+                    lineWidth: 1))
+                if pending {
+                    ProgressView().controlSize(.small).offset(y: 18)
                 }
                 if store.itemCount > 1 {
                     Text("\(store.itemCount)")
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(.regularMaterial, in: Capsule())
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.black.opacity(0.85))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color(white: 0.96), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                        .padding(9)
+                        .padding(8)
                 }
             }
+            .frame(width: Self.size.width, height: Self.size.height)
+            .compositingGroup()
+            .shadow(color: .black.opacity(0.3), radius: 5, y: 2)
+            .scaleEffect(hot ? 1.04 : 1)
+            // The stack in hand, sharp and in front of the folder. The drag takes over from
+            // it at the same spot, so it vanishes without animating then.
+            CardFan(items: Array(inHand), thumbs: thumbs,
+                    places: store.hand == nil ? CardPlace.folder : CardPlace.hand,
+                    scale: store.hand == nil ? 1 : CardPlace.handScale)
+                .offset(x: (store.hand?.x ?? center) - center, y: (store.hand?.y ?? center) - center)
+                .opacity(store.hand == nil ? 0 : 1)
+                .animation(store.draggingItemIDs.isEmpty ? .spring(response: 0.22, dampingFraction: 0.72) : nil,
+                           value: store.hand)
         }
-        .scaleEffect(hot ? 1.04 : 1)
         .animation(.easeOut(duration: 0.12), value: hot)
+        .animation(.easeOut(duration: 0.12), value: away)
         .task(id: items.map(\.path)) { for i in items { thumbs.load(i) } }
+    }
+
+    /// The cards standing in the folder. They rise while something hovers.
+    private func cards(_ items: [ShelfItem], hot: Bool) -> some View {
+        CardFan(items: items, thumbs: thumbs, places: CardPlace.folder, scale: 1)
+            .offset(y: hot ? -5 : 0)
+            .opacity(store.items.contains { $0.state == .pending } ? 0.6 : 1)
+    }
+}
+
+/// Where a card sits, relative to the middle of the view. Newest first.
+struct CardPlace {
+    let x: CGFloat, y: CGFloat, angle: Double
+
+    /// Spread out across the folder.
+    static let folder = [CardPlace(x: -20, y: -11, angle: -8), CardPlace(x: 7, y: -13, angle: -3), CardPlace(x: 29, y: -12, angle: 4)]
+    /// Gathered into one stack.
+    static let hand = [CardPlace(x: 0, y: 0, angle: -4), CardPlace(x: 4, y: -2, angle: 2), CardPlace(x: 8, y: -4, angle: 8)]
+    static let handScale: CGFloat = 1.2
+}
+
+/// Up to three files as cards, the newest on top.
+struct CardFan: View {
+    let items: [ShelfItem]
+    @ObservedObject var thumbs: Thumbnails
+    let places: [CardPlace]
+    let scale: CGFloat
+
+    var body: some View {
+        ZStack {
+            ForEach(Array(items.enumerated().reversed()), id: \.offset) { i, item in
+                FolderCard(image: thumbs.image(for: item), isThumbnail: thumbs.images[item.path] != nil)
+                    .scaleEffect(scale)
+                    .rotationEffect(.degrees(places[i].angle))
+                    .offset(x: places[i].x, y: places[i].y)
+            }
+        }
+    }
+}
+
+/// One file in the folder: a thumbnail filling a white-edged card, or an icon sitting on one.
+private struct FolderCard: View {
+    let image: NSImage
+    let isThumbnail: Bool
+
+    var body: some View {
+        let width: CGFloat = 46, height: CGFloat = 62, edge: CGFloat = 4
+        ZStack {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color(white: 0.96))
+            if isThumbnail {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: width - edge * 2, height: height - edge * 2)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            } else {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: width - edge * 2)
+                    // Up where the folder's front doesn't hide it.
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(.top, edge)
+            }
+        }
+        .frame(width: width, height: height)
+        .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
+    }
+}
+
+/// The folder's front: a tab on the left that curves down into a lower right shoulder.
+private struct FolderFront: Shape {
+    func path(in rect: CGRect) -> Path {
+        let r: CGFloat = 11, tabTop = rect.minY + 21, shoulder = rect.minY + 34
+        let curveStart = rect.minX + rect.width * 0.46, curveEnd = rect.minX + rect.width * 0.64
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX, y: tabTop + r))
+        p.addQuadCurve(to: CGPoint(x: rect.minX + r, y: tabTop), control: CGPoint(x: rect.minX, y: tabTop))
+        p.addLine(to: CGPoint(x: curveStart, y: tabTop))
+        p.addCurve(to: CGPoint(x: curveEnd, y: shoulder),
+                   control1: CGPoint(x: curveStart + 11, y: tabTop),
+                   control2: CGPoint(x: curveEnd - 11, y: shoulder))
+        p.addLine(to: CGPoint(x: rect.maxX - r, y: shoulder))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX, y: shoulder + r), control: CGPoint(x: rect.maxX, y: shoulder))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
+        p.addQuadCurve(to: CGPoint(x: rect.maxX - r, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX + r, y: rect.maxY))
+        p.addQuadCurve(to: CGPoint(x: rect.minX, y: rect.maxY - r), control: CGPoint(x: rect.minX, y: rect.maxY))
+        p.closeSubpath()
+        return p
     }
 }
 

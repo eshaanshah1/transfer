@@ -15,8 +15,6 @@ enum Snapshot {
         func render(_ name: String) {
             let r = ImageRenderer(content: SquareView(store: store, thumbs: thumbs)
                 .frame(width: SquareController.side, height: SquareController.side)
-                .background(Color.clear,
-                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .padding(24)
                 .background(Color(red: 0.17, green: 0.19, blue: 0.19)))
             r.scale = 2
@@ -51,7 +49,17 @@ enum Snapshot {
         for i in store.items { thumbs.load(i) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             render("square-full.png")
-            exit(0)
+            store.hand = CGPoint(x: 66, y: 62)
+            render("square-pressed.png")
+            store.hand = nil
+            // A file with no thumbnail: its icon on a card.
+            let note = samples.appendingPathComponent("notes.xyz")
+            try? Data("notes".utf8).write(to: note)
+            store.add([.reference(note)])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                render("square-icon.png")
+                exit(0)
+            }
         }
         RunLoop.main.run()
     }
