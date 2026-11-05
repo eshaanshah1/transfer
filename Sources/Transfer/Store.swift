@@ -6,10 +6,12 @@ final class Store: ObservableObject {
     /// A drag is in progress somewhere: the square shows as a drop target.
     @Published var dragActive = false
     /// A drag is hovering over the square.
+    /// While the mouse is held on the folder: where the stack sits in hand, top-down in the window.
+    @Published var hand: CGPoint?
     @Published var targeted = false
 
     /// Items in a drag that started on the square.
-    var draggingItemIDs: [UUID] = []
+    @Published var draggingItemIDs: [UUID] = []
 
     private var saveWork: DispatchWorkItem?
     private var loading = false
