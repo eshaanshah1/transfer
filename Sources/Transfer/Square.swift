@@ -232,6 +232,11 @@ final class SquarePanel: NSPanel {
             return
         }
         shown = true
+        // When the Dock restarts it can forget that this window belongs on every Space,
+        // leaving it stuck on whichever desktop it was last on. Re-assert it each time.
+        let behavior = collectionBehavior
+        collectionBehavior = []
+        collectionBehavior = behavior
         // Slide in from the edge.
         var start = frame
         switch edge {
